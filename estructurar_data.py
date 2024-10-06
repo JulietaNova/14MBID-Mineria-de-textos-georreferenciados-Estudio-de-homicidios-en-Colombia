@@ -2,21 +2,22 @@
 @author: Ingrid Rodriguez
 """
 import pandas as pd
-import nltk
+#import nltk
 import os
 import re
-from nltk.probability import FreqDist
-from nltk.corpus import stopwords
+#from nltk.probability import FreqDist
+#from nltk.corpus import stopwords
 import json
 import spacy 
-from spacy.tokens import Span
+#from spacy.tokens import Span
 from datetime import datetime
+import pycountry
 
 ###############################################################
 ###############################################################
 #Expresiones regulares de fecha
-# Formato 12 de septiembre de 2023
-regex_formato_textual = r'\b\d{1,2}\sde\s(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\sde\s\d{4}\b'
+# Formato 12 de septiembre de|del 2023
+regex_formato_textual = r'\b\d{1,2}\sde\s(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\s(?:de|del)\s\d{4}\b'
 # Formato Septiembre 12, 2023 o Sept 12, 2023
 regex_mes_antes = r'\b(?:enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\s\d{1,2},?\s\d{4}\b'
 # Formato dd/mm/yyyy o dd-mm-yyyy
@@ -25,17 +26,6 @@ regex_formato_numerico = r'\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b'
 regex_formato_iso = r'\b\d{2,4}[-/]\d{1,2}[-/]\d{1,2}\b'
 # Combinar todas las expresiones regulares en una lista
 regex_fechas = [regex_formato_textual, regex_mes_antes, regex_formato_numerico, regex_formato_iso]
-###############################################################
-# Expresiones regulares para detectar delitos y variaciones
-patrones_delitos = {
-    "secuestro": r"secuest\w+",
-    "violación": r"violaci\w+",
-    "feminicidio": r"feminicid\w+",
-    "robo": r"rob\w+",
-    "asalto": r"asalt\w+",
-    "masacre": r"masacr\w+"
-}
-###############################################################
 ###############################################################
 # Diccionario para convertir meses en español a números
 meses = {
@@ -46,7 +36,6 @@ meses = {
     'septiembre': 9, 'sep': 9, 'octubre': 10, 'oct': 10, 
     'noviembre': 11, 'nov': 11, 'diciembre': 12, 'dic': 12
 }
-###############################################################
 ###############################################################
 ###### Funcion convertir_a_fecha
 def convertir_a_fecha(fecha_str):
@@ -80,6 +69,10 @@ def convertir_a_fecha(fecha_str):
             if anio < 100:
                 anio += 2000
             
+            # Si día es mayor a 31 se asume error y se cambia a 01
+            if dia > 31:
+                dia = 1
+            
             # Crear el objeto datetime
             fecha = datetime(anio, mes, dia)
             
@@ -90,12 +83,24 @@ def convertir_a_fecha(fecha_str):
     return "No se encontró una fecha en un formato válido."
 ###############################################################
 ###############################################################
-###### Funcion para normalizar delitos a un solo nombre donde la py --versionbase de las expresiones regulares se mantengan
+# Expresiones regulares para detectar delitos y variaciones
+patrones_delitos = {
+    "secuestro": r"secuest\w+",
+    "violación": r"viola\w+",
+    "feminicidio": r"feminicid\w+",
+    "robo": r"rob\w+",
+    "asalto": r"asalt\w+",
+    "hurto": r"hurt\w+",
+    "terrorismo": r"terroris\w+",
+    "narcotráfico": r"narcotr\w+",
+    "masacre": r"masacr\w+"
+}
+###### Funcion para normalizar delitos a un solo nombre donde la py --version base de las expresiones regulares se mantengan
 # Función para normalizar delitos a una forma estándar
 def normalizar_delito(texto_delito):
     if re.match(r"secuest\w+", texto_delito.lower()):
         return "secuestro"
-    if re.match(r"violaci\w+", texto_delito.lower()):#viola_ r dor dores da n ron ...
+    if re.match(r"viola\w+", texto_delito.lower()):
         return "violación"
     if re.match(r"feminici\w+", texto_delito.lower()): 
         return "feminicidio"
@@ -120,6 +125,9 @@ df_depmun = pd.read_csv("datos_base/Departamentos_y_municipios_de_Colombia.csv")
 # Crear conjuntos para buscar más rápido
 municipios = set(df_depmun['MUNICIPIO'].str.lower())
 departamentos = set(df_depmun['DEPARTAMENTO'].str.lower())
+
+# Crear listado de paises
+paises = {country.name for country in pycountry.countries}
 ###############################################################
 ###############################################################
 ###### Funcion para normalizar delitos a un solo nombre donde la base de las expresiones regulares se mantengan
@@ -147,22 +155,19 @@ def obtener_departamento(municipio):
         # Si no se encuentra el municipio, retornar un mensaje
         return f"Sin especificar"
 ###############################################################
-# Cargar la lista de personajes para no tener en cuenta dentro de los articulos
-df_personajes = pd.read_csv("datos_base/Personajes.csv")
 
-# Crear conjuntos para buscar más rápido
-personajes = set(df_personajes['NOMBRE'].str.lower())
-###############################################################
 indice = []
 # Directorio de trabajo
-#os.chdir(os.path.dirname(os.path.abspath(__file__)) + '/articulos_x_procesar/')
-os.chdir('C:/Projects/TFM/articulos_x_procesar/')
+os.chdir('articulos_x_procesar/')
 files_csv = os.listdir()
-nlp = spacy.load("es_core_news_md")  # Modelo para español
+nlp = spacy.load("es_core_news_lg")  # Modelo para español
+palabrasExcluir = nlp.Defaults.stop_words #listado de stopwords de spacy usado para filtros posteriores
+palabrasExcluir.add("el tiempo")
 
 lstEventos = []
 df = pd.DataFrame()
 for i in files_csv:
+    print(i)
     #Se inicializa el diccionario
     evento = {}
     # Formación del data frame a través de la lectura del archivo
@@ -172,7 +177,12 @@ for i in files_csv:
     
     ###############################################################
     # Agregar el titulo del articulo
-    evento["tituloarticulo"] = df_text.split('\n')[1][1:].strip()
+    tituloarticulo = df_text.split('\n')[1][1:].strip()
+    evento["tituloarticulo"] = tituloarticulo
+    
+    #Tokenizacion de titulos
+    doc_titulo = nlp(tituloarticulo)
+    evento["tokenizaciontitulo"] = [token.text for token in doc_titulo if not token.is_stop and not token.is_punct]   
     
     ###############################################################
     # Agregar fecha del articulo
@@ -193,11 +203,16 @@ for i in files_csv:
         fechas_date.append(fecha_formato)
 
     # Obtener la menor fecha y adicionarla al diccionario de eventos de asesinatos si existen fechas
+    fecha_menor = ''
     if len(fechas_date) > 0:
         fecha_menor = min(fechas_date)
-        evento["fecha"] = fecha_menor
+        
+    if fecha_menor :
+        evento["fechaevento"] = fecha_menor
+        evento["fechaestimada"] = fecha_menor
     else:
-        evento["fecha"] = fechaarticulo
+        evento["fechaestimada"] = fechaarticulo 
+    
     ###############################################################
     #Buscar otros delitos expuestos usando expresiones regulares y adicionando los resultados a las entidades de Spacy
     # Procesar el texto con SpaCy
@@ -230,11 +245,11 @@ for i in files_csv:
 
     # Actualizar las entidades del documento con las nuevas entidades detectadas y filtradas
     doc.ents = ents_filtradas
-
-    #Se reinician las variables 
-    delitos_relacionados = []
+    
     municipio = ""
     departamento = ""
+    paisEncontrado = ""
+    delitos_relacionados = []
     personas_involucradas = []
     for ent in doc.ents:
         if ent.label_ == "DELITO":
@@ -248,9 +263,12 @@ for i in files_csv:
             elif tipo == "Departamento" and departamento == "":
                 municipio = "Sin especificar"
                 departamento = ent.text
-        elif ent.label_ == "PER": # Verificar cada localización detectada
-            if ent.text.lower() not in personajes and ent.text not in personas_involucradas:
-                personas_involucradas.append(ent.text)
+            elif ent.text in paises :
+                paisEncontrado = ent.text
+        elif ent.label_ == "PER": # Verificar cada persona detectada
+            persona_detectada = ent.text
+            if persona_detectada not in personas_involucradas and persona_detectada.lower() not in palabrasExcluir and persona_detectada.find("http") == -1:
+                personas_involucradas.append(persona_detectada)
     
     # Adicionar al diccionario de eventos de asesinatos los delitos relacionados si existen
     delitos_sinduplicados = list(set(delitos_relacionados))
@@ -258,47 +276,32 @@ for i in files_csv:
         evento["delitos_relacionados"] = delitos_sinduplicados
     
     # Adicionar al diccionario de eventos la ubicacion del evento si existe
-    if municipio != "" or departamento != "":
+    if paisEncontrado != "":
+        evento["pais"] = "Colombia" if paisEncontrado == "Colombia" or departamento != "" else "Otros Paises"
+
+    if departamento != "":
         evento["pais"] = "Colombia"
         evento["departamento"] = departamento
         evento["municipio"] = municipio
-    
+
     # Adicionar al diccionario de eventos de asesinatos las personas relacionadas si existen
     personas_involucradas_sinduplicados = list(set(personas_involucradas))
-    # Separar los nombres completos y apellidos
-    nombres_completos = [nombre for nombre in personas_involucradas_sinduplicados if " " in nombre]
-    apellidos = [apellido for apellido in personas_involucradas_sinduplicados if " " not in apellido]
-    personas_ordlenasc = sorted(personas_involucradas_sinduplicados, key=lambda x: len(x.split()), reverse=True)
-    personas_ordlendesc = sorted(personas_involucradas_sinduplicados, key=lambda x: len(x.split()), reverse=True)
-    # Iteramos por los apellidos
-    for nombre_largo in personas_ordlendesc:
-        # Buscamos si el apellido está en algún nombre completo
-        for nombre_corto in personas_ordlenasc:
-            if nombre_corto in nombre_largo and nombre_corto != nombre_largo and personas_involucradas_sinduplicados.count(nombre_corto) > 1:
-                # Si el apellido está en el nombre completo, lo eliminamos de la lista original
-                personas_involucradas_sinduplicados.remove(nombre_corto)
-                break  # Salimos del bucle para evitar que se elimine más de una vez el apellido
+    personas_involucradas_sinduplicados.sort(key=len, reverse=True)
+    personas_involucradas_procesado = []
 
-    if len(personas_involucradas_sinduplicados) > 0:
-        evento["personas_involucradas"] = personas_involucradas_sinduplicados
+    # Iteramos sobre cada persona en la lista ordenada
+    for persona in personas_involucradas_sinduplicados:
+        # Comprobamos si 'persona' no está contenida en ninguna de las ya añadidas a resultados_finales
+        if not any(persona in personaB for personaB in personas_involucradas_procesado):
+            personas_involucradas_procesado.append(persona)
+    
+    if len(personas_involucradas_procesado) > 0:
+        evento["personas_involucradas"] = personas_involucradas_procesado
     ##################################################################################################
     lstEventos.append(evento)
-    print(evento)
+    #print(evento)
 
 #################################################################################################
-# Leer el contenido actual del archivo JSON con el resultado del procesamiento de los articulos
-# noticicias_est = "C:/Projects/TFM/noticias_estandarizadas.json"
-
-# if os.path.exists(noticicias_est):
-#     print("El archivo existe.")
-# else:
-#     print("El archivo no existe.")
-
-# with open(noticicias_est, "r", encoding="utf-8") as archivo:
-#     noticias = json.load(archivo)
-# # Agregar el nuevo evento de asesinato a la lista de registros
-# noticias.append(evento)
-
-# Escribir los datos actualizados de vuelta al archivo JSON
+# Escribir los datos al archivo JSON
 with open("C:/Projects/TFM/noticias_estandarizadas.json", "w", encoding="utf-8") as archivo:
     json.dump(lstEventos, archivo, ensure_ascii=False, indent=4)
